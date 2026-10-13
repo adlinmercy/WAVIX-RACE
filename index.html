@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WAVIX RACE</title>
+
+<style>
+* {
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    background: radial-gradient(circle at top, #183a60, #07111f 70%);
+    color: #ffffff;
+    font-family: Arial, sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    overflow: auto;
+}
+
+.dashboard {
+    width: 100%;
+    max-width: 850px;
+    min-height: 100vh;
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 18px;
+}
+
+header {
+    text-align: center;
+}
+
+h1 {
+    margin: 0;
+    color: #43d9ff;
+    font-size: clamp(28px, 5vw, 42px);
+    letter-spacing: 5px;
+    text-shadow: 0 0 18px #168cff;
+}
+
+.subtitle {
+    margin: 8px 0;
+    color: #a7c8e8;
+    font-size: 12px;
+    letter-spacing: 3px;
+}
+
+.status {
+    color: #ffc857;
+    font-size: 13px;
+    text-align: center;
+    padding: 10px;
+    border: 1px solid #294763;
+    border-radius: 12px;
+    background: #0c1c2d;
+}
+
+button {
+    border: 1px solid #3e8cbf;
+    background: linear-gradient(145deg, #183b5d, #10263e);
+    color: white;
+    border-radius: 18px;
+    font-size: 26px;
+    font-weight: bold;
+    box-shadow: 0 5px 0 #06101c;
+    cursor: pointer;
+    touch-action: none;
+    user-select: none;
+}
+
+button:active {
+    transform: translateY(4px);
+    box-shadow: 0 1px 0 #06101c;
+    background: #087ca9;
+}
+
+.connect {
+    width: 100%;
+    padding: 15px;
+    background: linear-gradient(90deg, #087ca9, #1252a0);
+    font-size: 17px;
+    letter-spacing: 2px;
+}
+
+.controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-rows: repeat(3, minmax(65px, 1fr));
+    gap: 12px;
+    max-width: 500px;
+    width: 100%;
+    align-self: center;
+}
+
+.controls button {
+    min-height: 65px;
+}
+
+.forward {
+    grid-column: 2;
+    grid-row: 1;
+}
+
+.left {
+    grid-column: 1;
+    grid-row: 2;
+}
+
+.stop {
+    grid-column: 2;
+    grid-row: 2;
+    background: linear-gradient(145deg, #d93a4b, #861b2d);
+    border-color: #ff7180;
+    font-size: 16px;
+}
+
+.right {
+    grid-column: 3;
+    grid-row: 2;
+}
+
+.backward {
+    grid-column: 2;
+    grid-row: 3;
+}
+
+.footer {
+    text-align: center;
+    color: #789ab9;
+    font-size: 11px;
+}
+
+@media (orientation: landscape) and (max-height: 500px) {
+    .dashboard {
+        min-height: 100vh;
+        padding: 8px 18px;
+        gap: 8px;
+    }
+
+    h1 {
+        font-size: 25px;
+    }
+
+    .subtitle {
+        margin: 3px;
+    }
+
+    .controls {
+        grid-template-rows: repeat(3, minmax(45px, 1fr));
+        max-width: 420px;
+        gap: 8px;
+    }
+
+    .controls button {
+        min-height: 45px;
+    }
+
+    .status {
+        padding: 6px;
+    }
+
+    .connect {
+        padding: 9px;
+    }
+}
+</style>
+</head>
+
+<body>
+<main class="dashboard">
+
+    <header>
+        <h1>WAVIX RACE</h1>
+        <p class="subtitle">ESP32 BLUETOOTH CONTROL</p>
+    </header>
+
+    <button class="connect" id="connectBtn">
+        CONNECT TO CAR
+    </button>
+
+    <div class="status" id="status">
+        ● DISCONNECTED — Connect to your car
+    </div>
+
+    <section class="controls">
+        <button class="forward" data-command="F">▲</button>
+        <button class="left" data-command="L">◀</button>
+        <button class="stop" id="stopBtn">■ STOP</button>
+        <button class="right" data-command="R">▶</button>
+        <button class="backward" data-command="B">▼</button>
+    </section>
+
+    <div class="footer">
+        HOLD A DIRECTION TO DRIVE · RELEASE TO STOP
+    </div>
+
+</main>
+
+<script>
+const SERVICE_UUID =
+    "12345678-1234-1234-1234-1234567890ab";
+
+const CHARACTERISTIC_UUID =
+    "abcd1234-5678-1234-5678-abcdef123456";
+
+let device = null;
+let server = null;
+let characteristic = null;
+let activeCommand = null;
+let commandTimer = null;
+let connectionGeneration = 0;
+
+const statusBox = document.getElementById("status");
+const connectBtn = document.getElementById("connectBtn");
+
+function setStatus(message) {
+    statusBox.textContent = message;
+}
+
+async function sendCommand(command) {
+    if (!characteristic || !device?.gatt?.connected) {
+        setStatus("NOT CONNECTED — Connect to your car");
+        return;
+    }
+
+    try {
+        const data = new TextEncoder().encode(command);
+
+        if (characteristic.properties.writeWithoutResponse) {
+            await characteristic.writeValueWithoutResponse(data);
+        } else {
+            await characteristic.writeValueWithResponse(data);
+        }
+    } catch (error) {
+        console.error(error);
+        setStatus("COMMAND FAILED — Check the connection");
+        stopRepeatingCommands();
+    }
+}
+
+function stopRepeatingCommands() {
+    if (commandTimer !== null) {
+        clearInterval(commandTimer);
+        commandTimer = null;
+    }
+
+    activeCommand = null;
+}
+
+async function stopCar() {
+    stopRepeatingCommands();
+
+    if (characteristic && device?.gatt?.connected) {
+        await sendCommand("S");
+        setStatus("CONNECTED — Car stopped");
+    }
+}
+
+function startCommand(command) {
+    if (!characteristic || !device?.gatt?.connected) {
+        setStatus("CONNECT FIRST");
+        return;
+    }
+
+    if (activeCommand === command) return;
+
+    stopRepeatingCommands();
+
+    activeCommand = command;
+    sendCommand(command);
+
+    // Refresh the movement command while the button is held.
+    commandTimer = setInterval(() => {
+        if (activeCommand === command) {
+            sendCommand(command);
+        }
+    }, 200);
+
+    setStatus("CONNECTED — COMMAND: " + command);
+}
+
+async function connectToCar() {
+    if (!navigator.bluetooth) {
+        setStatus("Web Bluetooth unavailable. Use supported Chrome on Android.");
+        return;
+    }
+
+    connectBtn.disabled = true;
+
+    try {
+        setStatus("SEARCHING FOR WAVIX RACE BLE...");
+
+        device = await navigator.bluetooth.requestDevice({
+            filters: [{
+                name: "WAVIX RACE BLE",
+                services: [SERVICE_UUID]
+            }]
+        });
+
+        device.addEventListener("gattserverdisconnected", () => {
+            connectionGeneration++;
+            stopRepeatingCommands();
+            characteristic = null;
+            server = null;
+            setStatus("DISCONNECTED — Motors should be stopped");
+        });
+
+        server = await device.gatt.connect();
+
+        const service = await server.getPrimaryService(SERVICE_UUID);
+
+        characteristic =
+            await service.getCharacteristic(CHARACTERISTIC_UUID);
+
+        connectionGeneration++;
+
+        await sendCommand("S");
+
+        setStatus("CONNECTED TO WAVIX RACE BLE");
+    } catch (error) {
+        console.error(error);
+        setStatus("CONNECTION FAILED — " + error.message);
+    } finally {
+        connectBtn.disabled = false;
+    }
+}
+
+connectBtn.addEventListener("click", connectToCar);
+
+document.querySelectorAll("[data-command]").forEach(button => {
+    const command = button.dataset.command;
+
+    button.addEventListener("pointerdown", event => {
+        event.preventDefault();
+        button.setPointerCapture(event.pointerId);
+        startCommand(command);
+    });
+
+    button.addEventListener("pointerup", event => {
+        event.preventDefault();
+        stopCar();
+    });
+
+    button.addEventListener("pointercancel", stopCar);
+    button.addEventListener("lostpointercapture", stopCar);
+});
+
+document.getElementById("stopBtn").addEventListener("click", stopCar);
+
+document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+        stopCar();
+    }
+});
+
+window.addEventListener("blur", stopCar);
+
+window.addEventListener("pagehide", () => {
+    stopRepeatingCommands();
+
+    if (characteristic && device?.gatt?.connected) {
+        sendCommand("S");
+    }
+});
+</script>
+</body>
+</html>
